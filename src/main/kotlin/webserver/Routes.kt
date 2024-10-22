@@ -1,13 +1,10 @@
-package gecw.ace.webserver
+package gecw.cse.webserver
 
 import gecw.ace.db.MongoDbManager
 import gecw.cse.utils.DateUtils
 import gecw.cse.utils.FileUtils
 import gecw.cse.utils.FingerPrintScanner
 import gecw.cse.utils.Uid
-import org.apache.commons.csv.CSVFormat
-import org.apache.commons.csv.CSVPrinter
-import org.bson.BsonArray
 import org.bson.BsonBoolean
 import org.bson.BsonDocument
 import org.bson.BsonString
@@ -18,10 +15,7 @@ import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 import org.springframework.web.multipart.MultipartFile
-import java.io.ByteArrayOutputStream
 import java.io.File
-import java.io.OutputStreamWriter
-import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -32,6 +26,11 @@ import java.util.concurrent.TimeUnit
 @RestController
 @RequestMapping("/api")
 class Routes {
+
+    @GetMapping("/")
+    fun index(): String {
+        return "{}"
+    }
 
     @GetMapping("/generate/uid")
     fun generateUid(): String {
@@ -95,22 +94,24 @@ class Routes {
         val uid = data.getString("uid").value
         val name = data.getString("name").value
         val rollNumber = data.getString("rollNumber").value
-        val semester = data.getString("semester").value
+        val batch = data.getString("batch").value
+        val regNo = data.getString("regNo").value
 
-        var semFolder = File("fingerprints", semester)
-        semFolder.mkdirs()
-        semFolder = File(semFolder, uid)
+        var batchFolder = File("fingerprints", batch)
+        batchFolder.mkdirs()
+        batchFolder = File(batchFolder, uid)
         val printsFolder = File("prints", uid)
-        printsFolder.copyRecursively(semFolder, true)
+        printsFolder.copyRecursively(batchFolder, true)
         printsFolder.deleteRecursively()
 
         MongoDbManager.mongoClient.getDatabase("ace").getCollection("users").insertOne(Document().apply {
             append("_id", uid)
             append("name", name)
             append("rollNumber", rollNumber)
-            append("semester", semester)
+            append("batch", batch)
             append("created_at", Date())
             append("updated_at", Date())
+            append("regNo", regNo)
         })
 
         return BsonDocument().apply {
@@ -131,7 +132,7 @@ class Routes {
     @PostMapping("/finger/detect")
     fun detectFinger(
         @RequestParam("file") file: MultipartFile,
-        @RequestParam("sem") sem: String,
+        @RequestParam("batch") batch: String,
         @RequestParam("type") type: String,
         @RequestParam("session") session: String
     ): String {
@@ -144,7 +145,7 @@ class Routes {
                 }
             }
 
-            val uid = FingerPrintScanner().detectFingerprint(filePath, sem)
+            val uid = FingerPrintScanner().detectFingerprint(filePath, batch)
             filePath.delete()
 
             val user =
@@ -196,10 +197,14 @@ class Routes {
     }
 
     @GetMapping("/records")
-    fun getAllRecords(@RequestParam date: String, @RequestParam sem: String, @RequestParam session: String): String {
+    fun getAllRecords(@RequestParam date: String, @RequestParam batch: String, @RequestParam session: String): String {
+
+        println(batch)
         val users = MongoDbManager.mongoClient.getDatabase("ace").getCollection("users").find(Document().apply {
-            append("semester", sem)
+            append("batch", batch)
         }).toList()
+
+        println(users)
 
         if (users.isEmpty()) return "{data:[]}"
 
@@ -222,34 +227,35 @@ class Routes {
     }
 
     @GetMapping("/export/json")
-    fun exportStudentsAsJson(@RequestParam sem: String): ResponseEntity<ByteArrayResource> {
+    fun exportStudentsAsJson(@RequestParam batch: String): ResponseEntity<ByteArrayResource> {
+
         val users = MongoDbManager.mongoClient.getDatabase("ace").getCollection("users").find(Document().apply {
-            append("semester", sem)
+            append("batch", batch)
         }).toList()
 
         val json = if (users.isEmpty()) "[]" else users.joinToString(
             separator = ",", prefix = "[", postfix = "]"
         ) { it.toJson() }
 
-        val f = File("temps", "students_${Uid.generate()}_$sem.json")
+        val f = File("temps", "students_${Uid.generate()}_$batch.json")
         f.writeText(json)
 
         val resource = ByteArrayResource(f.readBytes())
 
         return ResponseEntity.ok()
-            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=students_${Uid.generate()}_$sem.json")
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=students_${Uid.generate()}_$batch.json")
             .contentType(MediaType.APPLICATION_OCTET_STREAM).contentLength(f.length()).body(resource)
     }
 
     @GetMapping("/export/csv")
     fun exportStudentsAsCsv(
-        @RequestParam sem: String,
+        @RequestParam batch: String,
         @RequestParam session: String,
         @RequestParam date: String
     ): ResponseEntity<ByteArrayResource> {
-        println(getAllRecords(date, sem, session))
+        println(getAllRecords(date, batch, session))
         var records = "Name, Roll number, Semester, Session, In time, Out time"
-        BsonDocument.parse(getAllRecords(date, sem, session))["data"]?.asArray()?.forEach {
+        BsonDocument.parse(getAllRecords(date, batch, session))["data"]?.asArray()?.forEach {
             val logs = it.asDocument()["logs"]?.asArray()
             var inTime = "Na"
             var outTime = "Na"
@@ -270,20 +276,21 @@ class Routes {
                     outTime = timeString ?: "Na"
                 }
             }
-            records+="\n${it.asDocument()["name"]?.asString()?.value},${it.asDocument()["rollNumber"]?.asString()?.value},$sem,$session,$inTime,$outTime"
+            records+="\n${it.asDocument()["name"]?.asString()?.value},${it.asDocument()["rollNumber"]?.asString()?.value},$batch,$session,$inTime,$outTime"
         }
         val f = File(Uid.generate()+".csv").apply { writeText(records) }
         val resource = ByteArrayResource(f.readBytes())
         FileUtils.deleteFileAfterDelay(f, 5, TimeUnit.MINUTES)
 
         return ResponseEntity.ok()
-            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=students_${Uid.generate()}_$sem.csv")
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=students_${Uid.generate()}_$batch.csv")
             .contentType(MediaType.APPLICATION_OCTET_STREAM).contentLength(f.length()).body(resource)
 
     }
 
-    @GetMapping("/test")
-    fun test(): String {
+    @GetMapping("/delete")
+    fun deleteEntry(@RequestParam uid: String): String {
+        MongoDbManager.mongoClient.getDatabase("ace").getCollection("users").deleteOne(Document("_id", uid))
         return "{}"
     }
 }

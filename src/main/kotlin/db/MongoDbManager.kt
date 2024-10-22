@@ -8,7 +8,7 @@ class MongoDbManager {
         lateinit var mongoClient: MongoClient
 
         fun connect() {
-            mongoClient = MongoClients.create("mongodb://localhost:27017")
+            mongoClient = MongoClients.create("mongodb+srv://adhilmhdk28:QVYtWKlypJGsp68q@cluster0.ce9y1h1.mongodb.net")
         }
 
     }
